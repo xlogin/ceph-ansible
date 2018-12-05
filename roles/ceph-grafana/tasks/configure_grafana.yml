@@ -1,0 +1,74 @@
+---
+- name: make sure grafana is down
+  service:
+    name: grafana-server
+    state: stopped
+
+- name: wait for grafana to be stopped
+  wait_for:
+    port: 3000
+    state: stopped
+
+- name: make sure grafana configuration directories exist
+  file:
+    path: "/etc/grafana/provisioning/datasources"
+    state: directory
+    recurse: yes
+
+- name: write grafana.ini
+  template:
+    src: grafana.ini
+    dest: /etc/grafana/grafana.ini
+    mode: 0640
+
+- name: write datasources provisioning config file
+  template:
+    src: datasources-ceph-dashboard.yml
+    dest: /etc/grafana/provisioning/datasources/ceph-dashboard.yml
+    mode: 0640
+
+- name: copy grafana SSL certificate file
+  copy:
+    src: "{{ grafana.crt }}"
+    dest: "/etc/grafana/ceph-dashboard.crt"
+    mode: 0640
+  when:
+    - grafana.crt
+    - dashboard_protocol == "https"
+
+- name: copy grafana SSL certificate key
+  copy:
+    src: "{{ grafana.key }}"
+    dest: "/etc/grafana/ceph-dashboard.key"
+    mode: 0640
+  when:
+    - grafana.key
+    - dashboard_protocol == "https"
+
+- name: generate a Self Signed OpenSSL certificate for dashboard
+  shell: |
+    test -f /etc/grafana/ceph-dashboard.key -a -f /etc/grafana/ceph-dashboard.crt || \
+    openssl req -new -nodes -x509 -subj '/O=IT/CN=ceph-grafana' -days 3650 -keyout /etc/grafana/ceph-dashboard.key -out /etc/grafana/ceph-dashboard.crt -extensions v3_ca
+  when:
+    - dashboard_protocol == "https"
+    - not grafana.key or not grafana.crt
+
+- name: set owner/group on /etc/grafana
+  file:
+    path: /etc/grafana
+    state: directory
+    # This is the UID used by the grafana container
+    owner: "{{ grafana.uid }}"
+    # This group is used by the grafana rpm
+    group: "grafana"
+    recurse: true
+
+- name: enable and start grafana
+  service:
+    name: grafana-server
+    state: restarted
+    enabled: true
+
+- name: wait for grafana to start
+  wait_for:
+    port: 3000
